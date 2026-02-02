@@ -1,0 +1,71 @@
+name: Auto Merge Patch
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  merge-patch:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [master, openwrt-25.12]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: master # 始终从 master 启动，获取脚本
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "Auto Merge Bot"
+          git config --global user.email "bot@github.com"
+
+      - name: Add Remotes
+        run: |
+          git remote add upstream https://github.com/immortalwrt/immortalwrt.git
+          git remote add patch_fork https://github.com/bingoguo93/immortalwrt.git
+
+      - name: Sync, Merge and Restore
+        run: |
+          echo "Processing target branch: ${{ matrix.branch }}"
+          
+          # 1. 获取所有远程代码
+          git fetch --all
+
+          # =========================================================
+          # 2. 【关键修正1】明确指定基于 upstream 重置/创建分支
+          # =========================================================
+          # -B 表示：如果分支不存在就创建，如果存在就强制重置
+          # 这样直接解决了 "matched multiple branches" 的歧义问题
+          git checkout -B ${{ matrix.branch }} upstream/${{ matrix.branch }}
+
+          # =========================================================
+          # 3. 合并代码 (此时不管脚本文件)
+          # =========================================================
+          echo "Merging changes from patch_fork..."
+          # 使用 -X theirs 强制保留 patch_fork 的修改
+          git merge patch_fork/${{ matrix.branch }} --no-edit --allow-unrelated-histories -X theirs
+
+          # =========================================================
+          # 4. 【关键修正2】合并完成后，再强制恢复脚本
+          # =========================================================
+          # 无论 merge 过程把 auto-merge.yml 删了还是改了，这里直接从 origin/master 覆盖回来
+          # 这样避免了 "local changes would be overwritten" 的错误
+          git checkout origin/master -- .github/workflows/auto-merge.yml
+
+          # 5. 提交脚本文件
+          # 确保这个脚本文件存在于当前分支中，防止下次运行出错
+          git add .github/workflows/auto-merge.yml
+          git commit -m "Restore and sync workflow script" || true
+
+      - name: Push Changes
+        run: |
+          git push -f origin ${{ matrix.branch }}
