@@ -50,43 +50,38 @@ jobs:
           fi
 
           # =========================================================
-          # 2. 注册机型 (强制写入 an7581.mk)
+          # 2. 注册机型 (使用正确的 bell_xg-040g-md 命名)
           # =========================================================
-          # 【修改点】不再判断 Makefile，强制指定 an7581.mk
-          # 这是 AN7581 系列机型的专用定义文件，写入这里最规范，也最不容易冲突
           TARGET_MK="target/linux/airoha/image/an7581.mk"
           
           if [ ! -f "$TARGET_MK" ]; then
-             echo "❌ Error: $TARGET_MK not found! Upstream structure might have changed."
-             # 只有当 an7581.mk 真的不存在时，才回退到 Makefile，作为最后的保底
+             echo "❌ Error: $TARGET_MK not found!"
              TARGET_MK="target/linux/airoha/image/Makefile"
              echo "⚠️ Fallback to $TARGET_MK"
           fi
           
           echo "🛠️ Appending definition to $TARGET_MK..."
           
-          # 检查是否已经存在 (防止脚本重复运行导致重复写入)
-          if grep -q "airoha_an7581-xg-040g-md" "$TARGET_MK"; then
+          # 检查是否已经存在 (防止重复)
+          if grep -q "bell_xg-040g-md" "$TARGET_MK"; then
              echo "⚠️ Definition already exists, skipping append."
           else
              cat >> "$TARGET_MK" <<EOF
           
           # Added by Auto-Graft Script
-          define Device/airoha_an7581-xg-040g-md
+          # Corrected Device ID: bell_xg-040g-md
+          define Device/bell_xg-040g-md
             DEVICE_VENDOR := Nokia Bell
             DEVICE_MODEL := XG-040G-MD
             DEVICE_DTS := an7581-xg-040g-md
             DEVICE_PACKAGES := kmod-airoha-ppe kmod-airoha-en7581-phy
           endef
-          TARGET_DEVICES += airoha_an7581-xg-040g-md
+          TARGET_DEVICES += bell_xg-040g-md
           EOF
-             echo "✅ Device registered."
+             echo "✅ Device registered as bell_xg-040g-md."
           fi
-
-          # =========================================================
-          # 3. 结果验证 (Self-Check)
-          # =========================================================
-          echo "🔍 Verifying content of $TARGET_MK (Last 15 lines):"
+          
+          # 打印验证
           tail -n 15 "$TARGET_MK"
 
       - name: Update Feeds & Config
@@ -95,11 +90,11 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           
-          # 生成配置 (验证 menuconfig 是否能识别)
+          # 生成配置 (注意这里必须使用 bell_xg-040g-md)
           cat > .config <<EOF
           CONFIG_TARGET_airoha=y
           CONFIG_TARGET_airoha_an7581=y
-          CONFIG_TARGET_airoha_an7581_DEVICE_airoha_an7581-xg-040g-md=y
+          CONFIG_TARGET_airoha_an7581_DEVICE_bell_xg-040g-md=y
           CONFIG_PACKAGE_kmod-airoha-ppe=y
           CONFIG_PACKAGE_kmod-airoha-en7581-phy=y
           CONFIG_PACKAGE_luci=y
@@ -112,7 +107,7 @@ jobs:
         working-directory: ./openwrt
         run: |
           git add .
-          git commit -m "Build: 24.10 + an7581-xg-040g-md" || echo "Nothing to commit"
+          git commit -m "Build: 24.10 + bell_xg-040g-md (Fixed Name)" || echo "Nothing to commit"
           
           cd ..
           cd openwrt
