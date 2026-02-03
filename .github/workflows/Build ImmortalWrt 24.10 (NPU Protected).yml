@@ -1,4 +1,4 @@
-name: Build ImmortalWrt 24.10 (Branch: xg040g)
+name: "Build ImmortalWrt 24.10 (Branch: xg040g)"
 
 permissions:
   contents: write
@@ -104,6 +104,5 @@ jobs:
           cd openwrt
           git remote add my_repo https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           
-          # 【修改点】推送到 openwrt-24.10-xg040g 分支
-          # 既保留了版本号格式，又区分了机型，完美！
+          # 推送到 openwrt-24.10-xg040g 分支
           git push -f my_repo HEAD:refs/heads/openwrt-24.10-xg040g
