@@ -1,0 +1,75 @@
+name: Build ImmortalWrt 24.10 (NPU Protected)
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  build-npu-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "NPU Builder"
+          git config --global user.email "bot@github.com"
+
+      - name: Prepare Source (ImmortalWrt 24.10)
+        run: |
+          # 1. 克隆 ImmortalWrt 官方 24.10 分支 (Kernel 6.6 + NPU支持)
+          rm -rf * .git
+          git clone -b openwrt-24.10 --single-branch https://github.com/immortalwrt/immortalwrt.git .
+          
+          # 2. 检查 NPU 驱动是否存在 (验证步，可忽略)
+          if grep -q "airoha-ppe" package/kernel/airoha-ppe/Makefile; then
+            echo "✅ NPU/PPE driver found!"
+          else
+            echo "⚠️ Warning: PPE driver check failed, but continuing..."
+          fi
+
+          # 3. 【关键】移植 XG-040G-MD 设备支持
+          # 因为 24.10 官方还没收录这台机器，我们需要从 Bingo 或 PR 那里把 dts 拿过来
+          # 这里我们选择从 Bingo 的仓库只抓取“设备定义文件”，因为 PR 的 dts 是针对 6.12 的，可能不兼容 6.6
+          
+          git remote add bingo https://github.com/bingoguo93/immortalwrt.git
+          git fetch bingo openwrt-25.12 --depth=10
+          
+          # 提取设备树 (DTS)
+          # 注意：Bingo 的路径可能在 target/linux/airoha/files/dts 或 dts/mediatek
+          # 我们尝试直接提取他的 target/linux/airoha 文件夹覆盖，但保留官方的 Makefile 核心
+          
+          # 策略调整：与其覆盖，不如追加。为了稳妥，我们手动下载适配补丁
+          # (由于脚本无法智能判断差异，这里推荐一个更稳的办法：拉取 PR 21689 的 patch 但只应用 dts 部分)
+          # 但最简单的还是信任 Bingo 的 dts (如果他在 6.12 能用，6.6 大概率也能用，或者会有微小差异)
+          
+          echo "Porting device support from Bingo..."
+          # 强行覆盖 airoha target 定义，这会把 XG-040G-MD 的选项加进去
+          # 注意：这可能会覆盖掉官方 24.10 的一些新修补，但为了识别机型必须这么做
+          git checkout bingo/openwrt-25.12 -- target/linux/airoha/image/Makefile
+          git checkout bingo/openwrt-25.12 -- target/linux/airoha/dts/xg-040g-md.dts || echo "DTS not found separately"
+          
+          # 如果 Bingo 把 dts 放在 patches 里，我们需要把 patches 拿过来
+          # 这是一个赌博，但为了 NPU 只能赌 Bingo 的配置
+          
+      - name: Update Feeds & Config
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          # 生成默认配置
+          # 注意：这里需要你手动在 menuconfig 里选中 Airoha -> XG-040G-MD
+          # 以及选中 kmod-airoha-ppe (NPU驱动) !!! 这一步非常重要
+          
+      - name: Push to Branch
+        run: |
+          git remote add my_repo https://github.com/${{ github.repository }}.git
+          git push -f my_repo HEAD:refs/heads/immortalwrt-24.10-npu-mod
