@@ -1,4 +1,4 @@
-name: Build ImmortalWrt 24.10 (NPU Protected)
+name: Build ImmortalWrt 24.10 (Precise Graft)
 
 permissions:
   contents: write
@@ -25,47 +25,88 @@ jobs:
 
       - name: Clone ImmortalWrt 24.10 Source
         run: |
-          # 1. 克隆到 'openwrt' 子目录，避免目录非空错误
+          # 1. 克隆官方 24.10 分支到子目录 openwrt
           git clone -b openwrt-24.10 --single-branch https://github.com/immortalwrt/immortalwrt.git openwrt
 
-      - name: Port Device Support (Surgical Graft)
+      - name: Port Device Support (Precise Mode)
         working-directory: ./openwrt
         run: |
-          # 2. 添加 Bingo 的仓库作为远程源
+          # 2. 添加 Bingo 源
           git remote add bingo https://github.com/bingoguo93/immortalwrt.git
-          git fetch bingo openwrt-25.12 --depth=10
+          git fetch bingo openwrt-25.12 --depth=20
 
-          echo "🛠️ Porting XG-040G-MD support to Kernel 6.6..."
+          echo "🔍 Diagnosing Bingo's file structure..."
+          
+          # 【调试关键】如果这次还失败，这个命令会告诉我们到底有什么文件
+          # 列出 target/linux/airoha 下的所有文件供参考
+          git ls-tree -r --name-only bingo/openwrt-25.12 | grep "target/linux/airoha" | head -n 20 || echo "Files not listed"
 
-          # A. 提取设备树 (DTS)
-          # 尝试从 Bingo 的 25.12 分支提取 DTS 文件
-          # 注意：如果在 25.12 中路径有所变化（例如在 dts/mediatek 下），这里会尝试通配查找
-          # 我们先尝试标准路径
+          # =========================================================
+          # A. 提取 DTS 文件 (使用确定的文件名)
+          # =========================================================
+          # 文件名：an7581-evb-xg-040g.dts
           
-          # 强制检出 DTS 文件。即使目录结构略有不同，checkout 会按源路径恢复
-          # 如果报错 "pathspec... did not match"，说明 Bingo 挪了位置，脚本会尝试容错
+          # 定义可能的路径列表 (以防他移动了位置)
+          POSSIBLE_PATHS=(
+            "target/linux/airoha/dts/an7581-evb-xg-040g.dts"
+            "target/linux/airoha/files/dts/an7581-evb-xg-040g.dts"
+            "target/linux/airoha/dts/xg-040g-md.dts"
+          )
           
-          if git checkout bingo/openwrt-25.12 -- target/linux/airoha/dts/xg-040g-md.dts 2>/dev/null; then
-            echo "✅ DTS file grafted successfully."
-          elif git checkout bingo/openwrt-25.12 -- target/linux/airoha/files/dts/xg-040g-md.dts 2>/dev/null; then
-             echo "✅ DTS file grafted (from files/dts)."
-          else
-             echo "⚠️ Warning: Specific DTS path not found. Trying to find it..."
-             # 这是一个备用方案：列出 Bingo 分支的文件找一找
-             # (此处为了脚本简洁，如果上面失败手动处理可能更稳，但通常就在这两个位置)
-             echo "❌ Failed to graft DTS automatically. Please check path."
-             exit 1 
+          FOUND_DTS=""
+          for path in "${POSSIBLE_PATHS[@]}"; do
+             if git cat-file -e "bingo/openwrt-25.12:$path" 2>/dev/null; then
+                FOUND_DTS="$path"
+                echo "✅ Found DTS at: $path"
+                break
+             fi
+          done
+          
+          # 如果还没找到，尝试暴力搜索
+          if [ -z "$FOUND_DTS" ]; then
+             echo "⚠️ Exact match failed, searching..."
+             FOUND_DTS=$(git ls-tree -r --name-only bingo/openwrt-25.12 | grep "an7581-evb-xg-040g.dts" | head -n 1)
           fi
 
-          # B. 修改 Makefile 以注册机型
-          # 直接覆盖 Image Makefile 风险较大（可能覆盖掉 24.10 的其他机型）
-          # 我们采用“追加”的方式，或者如果 Bingo 的文件很简单，就覆盖
-          # 鉴于 XG-040G-MD 是新增机型，我们尝试直接把 Bingo 的 image/Makefile 里的定义段落“偷”过来太复杂
-          # 这里做一个【粗暴但有效】的决定：直接覆盖 Makefile。
-          # 因为我们只编译这一台机器，覆盖了别人的定义也无所谓。
+          if [ -n "$FOUND_DTS" ]; then
+             # 确保目录存在
+             mkdir -p target/linux/airoha/dts
+             # 提取内容
+             git show "bingo/openwrt-25.12:$FOUND_DTS" > target/linux/airoha/dts/an7581-evb-xg-040g.dts
+             echo "✅ DTS grafted successfully to target/linux/airoha/dts/an7581-evb-xg-040g.dts"
+          else
+             echo "❌ CRITICAL: DTS file not found in Bingo's repo!"
+             exit 1
+          fi
+
+          # =========================================================
+          # B. 注册机型 (Patch Makefile)
+          # =========================================================
+          # 既然我们已经有了 dts，我们需要告诉 OpenWrt 编译它
+          # 直接追加定义到 Makefile，这是最稳的方法，不用管 Bingo 的 Makefile 长啥样
           
-          git checkout bingo/openwrt-25.12 -- target/linux/airoha/image/Makefile
-          echo "✅ Image Makefile patched."
+          MAKEFILE_PATH="target/linux/airoha/image/Makefile"
+          
+          echo "🛠️ Registering device in Makefile..."
+          
+          # 检查是否已经存在定义 (避免重复运行脚本时出错)
+          if grep -q "xg-040g" "$MAKEFILE_PATH"; then
+             echo "✅ Device already registered in Makefile."
+          else
+             # 追加定义
+             # 注意：DEVICE_DTS 必须匹配上面的文件名 (无后缀)
+             cat >> "$MAKEFILE_PATH" <<EOF
+          
+          define Device/airoha_an7581-evb-xg-040g
+            DEVICE_VENDOR := Nokia Bell
+            DEVICE_MODEL := XG-040G-MD
+            DEVICE_DTS := an7581-evb-xg-040g
+            DEVICE_PACKAGES := kmod-airoha-ppe kmod-airoha-en7581-phy
+          endef
+          TARGET_DEVICES += airoha_an7581-evb-xg-040g
+          EOF
+             echo "✅ Device definition appended to Makefile."
+          fi
 
       - name: Update Feeds & Config
         working-directory: ./openwrt
@@ -74,36 +115,26 @@ jobs:
           ./scripts/feeds install -a
           
           # 生成配置
-          # 这一步非常关键：必须确保选中 NPU 驱动
-          # 创建一个基础配置文件
+          # 务必选中刚才定义的机型
           cat > .config <<EOF
           CONFIG_TARGET_airoha=y
           CONFIG_TARGET_airoha_an7581=y
-          CONFIG_TARGET_airoha_an7581_DEVICE_xg-040g-md=y
+          CONFIG_TARGET_airoha_an7581_DEVICE_airoha_an7581-evb-xg-040g=y
           CONFIG_PACKAGE_kmod-airoha-ppe=y
           CONFIG_PACKAGE_kmod-airoha-en7581-phy=y
           CONFIG_PACKAGE_luci=y
           EOF
           
-          # 让 OpenWrt 自动补全依赖
           make defconfig
-          
-          echo "✅ Configuration generated with NPU driver enabled."
+          echo "✅ Config generated."
 
       - name: Push to Branch
         working-directory: ./openwrt
         run: |
-          # 提交更改
           git add .
-          git commit -m "Build: ImmortalWrt 24.10 + XG-040G-MD Graft" || echo "Nothing to commit"
+          git commit -m "Build: 24.10 + an7581-evb-xg-040g.dts" || echo "Nothing to commit"
           
-          # 推送到你的仓库的 submodule-branch 或作为一个独立分支
-          # 这里我们把构建好的源码推送到 'immortalwrt-24.10-npu-mod' 分支
-          
-          # 必须回到上一级目录或者是配置好 push url
           cd ..
-          
-          # 这是一个技巧：我们把 openwrt 目录变成一个 git 仓库推上去
           cd openwrt
           git remote add my_repo https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git push -f my_repo HEAD:refs/heads/immortalwrt-24.10-npu-mod
