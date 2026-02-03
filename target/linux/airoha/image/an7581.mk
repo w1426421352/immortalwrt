@@ -42,3 +42,13 @@ define Device/airoha_an7581-evb-emmc
   ARTIFACTS := preloader.bin bl31-uboot.fip
 endef
 TARGET_DEVICES += airoha_an7581-evb-emmc
+
+# Added by Auto-Graft Script
+# Corrected Device ID: bell_xg-040g-md
+define Device/bell_xg-040g-md
+  DEVICE_VENDOR := Nokia Bell
+  DEVICE_MODEL := XG-040G-MD
+  DEVICE_DTS := an7581-xg-040g-md
+  DEVICE_PACKAGES := kmod-airoha-ppe kmod-airoha-en7581-phy
+endef
+TARGET_DEVICES += bell_xg-040g-md
